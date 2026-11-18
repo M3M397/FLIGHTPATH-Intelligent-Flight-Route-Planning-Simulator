@@ -208,6 +208,116 @@ def env_blockers(weather: bool = False):
 def map_env():
     return dict(zones=ss.zones, obstacles=ss.obstacles, zones_enabled=ss.zones_enabled)
 
+def show_route_explanation(plan, route_type):
+    """Explain which simulated hazards the optimized route avoids."""
+
+    with st.container(key="card_explanation"):
+        ui.card_title("Why This Route Was Selected")
+
+        # A* did not find a clear route.
+        if not plan or not plan.get("optimized_clear") or not plan.get("optimized_segments"):
+            st.warning(
+                "No clear optimized route was found. "
+                "The current simulated hazards may block all available paths."
+            )
+            st.caption("Try disabling a restricted zone or removing an obstacle.")
+            return
+
+        # Collect the same environment objects used by the map.
+        items = md.all_env(
+            ss.zones,
+            ss.obstacles,
+            ss.zones_enabled
+        )
+
+        # Weather is included in route planning only in Weather Avoidance mode.
+        if route_type != "Weather Avoidance":
+            items = [item for item in items if item["kind"] != "weather"]
+
+        # Compare the direct route against the optimized route.
+        assessed = md.assess_route(
+            plan["optimized_segments"],
+            items,
+            plan["direct_segments"]
+        )
+
+        avoided = [item for item in assessed if item["detour"]]
+
+        affecting = [
+            item for item in assessed
+            if item["relation"] == "affects"
+        ]
+
+        nearby = [
+            item for item in assessed
+            if item["relation"] == "near" and not item["detour"]
+        ]
+
+        hazard_names = {
+            "zone": "Restricted zone",
+            "obstacle": "Obstacle",
+            "weather": "Weather anomaly"
+        }
+
+        if avoided:
+            st.success(
+                f"A* found a clear alternative route that avoids "
+                f"{len(avoided)} simulated hazard(s) on the direct route."
+            )
+
+            for item in avoided[:5]:
+                label = hazard_names.get(item["kind"], "Hazard")
+                location = item.get("location", "Unknown location")
+
+                st.markdown(
+                    f"- **{label} {item['id']} avoided:** "
+                    f"The direct route intersects this simulated hazard "
+                    f"near {location}; the optimized route stays outside it."
+                )
+
+            if len(avoided) > 5:
+                st.caption(f"And {len(avoided) - 5} more avoided hazards.")
+
+        elif plan.get("direct_blocked"):
+            st.info(
+                "The direct route is blocked by simulated environmental "
+                "conditions. A* found an alternative route."
+            )
+
+        else:
+            st.success(
+                "No active simulated hazard intersects the direct route. "
+                "The optimized route is clear."
+            )
+
+        # Mention hazards that are close to the optimized route,
+        # but whose simulated footprints it does not intersect.
+        if nearby:
+            st.markdown("**Nearby conditions:**")
+
+            for item in nearby[:3]:
+                label = hazard_names.get(item["kind"], "Hazard")
+                location = item.get("location", "Unknown location")
+
+                st.markdown(
+                    f"- {label} {item['id']} is near the optimized route "
+                    f"({location}), but does not intersect its simulated footprint."
+                )
+
+        # This should normally be empty when A* returns a clear route.
+        if affecting:
+            st.warning(
+                "The route proximity analysis still identifies "
+                f"{len(affecting)} hazard(s) intersecting the optimized route. "
+                "Review the map before relying on this simulation."
+            )
+
+        st.caption(
+            "Analysis uses simulated obstacles, restricted zones and, "
+            "in Weather Avoidance mode, simulated weather anomalies. "
+            "This is an educational simulation, not real aviation guidance."
+        )
+
 
 TIME_FACTOR = {"Shortest Distance": 1.0, "Fastest Time": 0.97, "Fuel Efficient": 1.05, "Weather Avoidance": 1.0}
 
@@ -253,10 +363,16 @@ def page_home():
 
     # Hidden until the passenger has searched for a route
     if found:
-        assessed = md.assess_route(plan["optimized_segments"],
-                                   md.all_env(ss.zones, ss.obstacles, ss.zones_enabled), plan["direct_segments"])
+        assessed = md.assess_route(
+            plan["optimized_segments"],
+            md.all_env(ss.zones, ss.obstacles, ss.zones_enabled),
+            plan["direct_segments"]
+        )
+
         with st.container(key="card_nearby"):
             ui.nearby_section(assessed)
+
+        show_route_explanation(plan, ss.route_type)
 
 
 def page_pilot():
@@ -348,6 +464,7 @@ def page_pilot():
                                        height=470, key="map_pilot", clickable=ss.click_mode != "Off"))
             ui.metrics_bar([("Distance", md.fmt_km(km), ""), ("Flight time", md.fmt_time(km * tf, ss.speed), ""),
                             ("Status", status, tone), ("Route type", ss.route_type, "")])
+            show_route_explanation(plan, ss.route_type)
             ui.html(f'<div class="fp-note">Cruise <b>{ss.cruise_alt:,} ft</b> · {ss.aircraft} · <b>{ss.speed} km/h</b>'
                     f' · max altitude {ss.max_alt:,} ft · simulated values</div>')
             if ss.compare:
