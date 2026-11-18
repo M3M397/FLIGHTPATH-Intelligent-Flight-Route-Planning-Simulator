@@ -369,31 +369,269 @@ _BEND_CANDIDATES = sorted(
 )
 
 
-def plan_route(points, blockers):
-    """FRONTEND STAND-IN (not A*). See module docstring."""
-    direct, optimized = [], []
+
+def _point_segment_distance(px, py, ax, ay, bx, by):
+    """Shortest distance from a point to a line segment."""
+    dx, dy = bx - ax, by - ay
+    length_sq = dx * dx + dy * dy
+
+    if length_sq == 0:
+        return math.hypot(px - ax, py - ay)
+
+    t = ((px - ax) * dx + (py - ay) * dy) / length_sq
+    t = max(0.0, min(1.0, t))
+
+    closest_x = ax + t * dx
+    closest_y = ay + t * dy
+
+    return math.hypot(px - closest_x, py - closest_y)
+
+
+def _is_blocked(x, y, blockers, clearance=0.5):
+    """Check whether a grid point falls inside a simulated hazard."""
+    for b in blockers:
+        radius = b["r"] + clearance
+        if math.hypot(x - b["x"], y - b["y"]) <= radius:
+            return True
+    return False
+
+
+def _segment_is_clear(a, b, blockers):
+    """Check whether a straight line between two points avoids hazards."""
+    for hazard in blockers:
+        distance = _point_segment_distance(
+            hazard["x"], hazard["y"],
+            a[0], a[1], b[0], b[1]
+        )
+
+        if distance <= hazard["r"] + 0.5:
+            return False
+
+    return True
+
+
+def _astar_leg(start, goal, blockers, step=1.5):
+    """
+    A* search between two map coordinates.
+
+    Uses an 8-direction grid and Euclidean distance as its heuristic.
+    Returns a list of map coordinates, or None if no route is found.
+    """
+    import heapq
+
+    sx, sy = start
+    gx, gy = goal
+
+    # A* grid bounds around this leg and its hazards.
+    chord = math.hypot(gx - sx, gy - sy)
+    largest_radius = max(
+        (b["r"] for b in blockers),
+        default=0
+    )
+    margin = max(20.0, chord * 0.25, largest_radius * 2.0)
+
+    min_x = min(sx, gx) - margin
+    max_x = max(sx, gx) + margin
+    min_y = min(sy, gy) - margin
+    max_y = max(sy, gy) + margin
+
+    def to_cell(point):
+        return (
+            round((point[0] - min_x) / step),
+            round((point[1] - min_y) / step)
+        )
+
+    def to_point(cell):
+        return (
+            min_x + cell[0] * step,
+            min_y + cell[1] * step
+        )
+
+    start_cell = to_cell(start)
+    goal_cell = to_cell(goal)
+
+    width = int((max_x - min_x) / step) + 2
+    height = int((max_y - min_y) / step) + 2
+
+    def inside(cell):
+        return (
+            0 <= cell[0] < width
+            and 0 <= cell[1] < height
+        )
+
+    def blocked(cell):
+        if cell == start_cell or cell == goal_cell:
+            return False
+
+        x, y = to_point(cell)
+        return _is_blocked(x, y, blockers)
+
+    # The eight possible movement directions.
+    directions = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, -1),           (0, 1),
+        (1, -1),  (1, 0),  (1, 1)
+    ]
+
+    def heuristic(cell):
+        x, y = to_point(cell)
+        return math.hypot(gx - x, gy - y)
+
+    open_heap = []
+    heapq.heappush(open_heap, (heuristic(start_cell), 0, start_cell))
+
+    came_from = {}
+    g_score = {start_cell: 0.0}
+    closed = set()
+
+    while open_heap:
+        _, current_cost, current = heapq.heappop(open_heap)
+
+        if current in closed:
+            continue
+
+        if current == goal_cell:
+            # Reconstruct the path.
+            cells = [current]
+
+            while current in came_from:
+                current = came_from[current]
+                cells.append(current)
+
+            cells.reverse()
+
+            path = [start]
+            path.extend(to_point(c) for c in cells[1:-1])
+            path.append(goal)
+
+            # Remove unnecessary intermediate points where a direct
+            # line is clear. This makes the displayed route smoother.
+            simplified = [path[0]]
+            anchor = 0
+
+            while anchor < len(path) - 1:
+                next_index = len(path) - 1
+
+                while next_index > anchor + 1:
+                    if _segment_is_clear(
+                        path[anchor],
+                        path[next_index],
+                        blockers
+                    ):
+                        break
+                    next_index -= 1
+
+                simplified.append(path[next_index])
+                anchor = next_index
+
+            return simplified
+
+        closed.add(current)
+
+        for dx, dy in directions:
+            neighbor = (current[0] + dx, current[1] + dy)
+
+            if not inside(neighbor) or neighbor in closed:
+                continue
+
+            if blocked(neighbor):
+                continue
+
+            # Prevent diagonal movement through blocked corners.
+            if dx != 0 and dy != 0:
+                side_a = (current[0] + dx, current[1])
+                side_b = (current[0], current[1] + dy)
+
+                if blocked(side_a) or blocked(side_b):
+                    continue
+
+            move_cost = step * (
+                math.sqrt(2) if dx != 0 and dy != 0 else 1
+            )
+
+            tentative_g = current_cost + move_cost
+
+            if tentative_g < g_score.get(neighbor, float("inf")):
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+
+                f_score = tentative_g + heuristic(neighbor)
+                heapq.heappush(
+                    open_heap,
+                    (f_score, tentative_g, neighbor)
+                )
+
+    # No valid path could be found.
+    return None
+
+
+def _points_to_segments(points):
+    """Convert route coordinates into the segment format used by the map."""
+    segments = []
+
     for p0, p1 in zip(points, points[1:]):
-        d = (p0, _control(p0, p1, DEFAULT_BEND), p1)
-        direct.append(d)
-        best, best_clear = d, _min_clearance([d], blockers)
-        if best_clear < 0:
-            for b in _BEND_CANDIDATES:
-                cand = (p0, _control(p0, p1, b), p1)
-                clear = _min_clearance([cand], blockers)
-                if clear >= 0:
-                    best, best_clear = cand, clear
-                    break
-                if clear > best_clear:
-                    best, best_clear = cand, clear
-        optimized.append(best)
+        midpoint = (
+            (p0[0] + p1[0]) / 2,
+            (p0[1] + p1[1]) / 2
+        )
+        segments.append((p0, midpoint, p1))
+
+    return segments
+
+
+def plan_route(points, blockers):
+    """
+    Plan a route using A* for every leg between departure,
+    optional waypoints and destination.
+
+    Keeps the existing return format so app.py can use it.
+    """
+    direct_segments = []
+
+    for p0, p1 in zip(points, points[1:]):
+        control = _control(p0, p1, DEFAULT_BEND)
+        direct_segments.append((p0, control, p1))
+
+    direct_blocked = _min_clearance(
+        direct_segments, blockers
+    ) < 0
+
+    optimized_points = []
+    route_found = True
+
+    for start, goal in zip(points, points[1:]):
+        leg = _astar_leg(start, goal, blockers)
+
+        if leg is None:
+            route_found = False
+            break
+
+        if optimized_points:
+            optimized_points.extend(leg[1:])
+        else:
+            optimized_points.extend(leg)
+
+    if route_found:
+        optimized_segments = _points_to_segments(optimized_points)
+        optimized_clear = (
+            _min_clearance(optimized_segments, blockers) >= 0
+        )
+    else:
+        optimized_segments = []
+        optimized_clear = False
+
     return {
-        "direct_segments": direct,
-        "optimized_segments": optimized,
-        "direct_km": segments_length_km(direct),
-        "optimized_km": segments_length_km(optimized),
-        "direct_blocked": _min_clearance(direct, blockers) < 0,
-        "optimized_clear": _min_clearance(optimized, blockers) >= 0,
+        "direct_segments": direct_segments,
+        "optimized_segments": optimized_segments,
+        "direct_km": segments_length_km(direct_segments),
+        "optimized_km": (
+            segments_length_km(optimized_segments)
+            if optimized_clear else 0.0
+        ),
+        "direct_blocked": direct_blocked,
+        "optimized_clear": optimized_clear,
     }
+
 
 
 def route_midpoint(segments):
