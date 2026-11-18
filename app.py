@@ -217,24 +217,28 @@ TIME_FACTOR = {"Shortest Distance": 1.0, "Fastest Time": 0.97, "Fuel Efficient":
 # --------------------------------------------------------------------------
 def page_home():
     ui.top_bar("Passenger Mode")
-    left, center, right = st.columns([1.05, 2.5, 1.0], gap="medium")
+    left, center, right = st.columns([1.0, 2.9, 1.0], gap="medium")
 
     with left:
-        ui.html("""<div class="fp-h1">Plan Your Flight</div>
-        <p class="fp-sub">Welcome aboard. Choose a Pakistani or international airport for your departure and destination, and FlightPath will show you a simulated route.</p>""")
-        bind(st.selectbox, "dep", "Departure", after=_route_changed, options=md.AIRPORT_CODES, format_func=md.airport_label)
-        bind(st.selectbox, "arr", "Destination", after=_route_changed, options=md.AIRPORT_CODES, format_func=md.airport_label)
-        if ss.dep == ss.arr:
-            st.warning("Departure and destination must be different.")
-        st.button("Find Optimal Route", type="primary", on_click=find_route, key="find_route")
+        with st.container(key="card_plan"):
+            ui.html("""<div class="fp-h1">Plan Your Flight</div>
+            <p class="fp-sub">Welcome aboard. Choose a Pakistani or international airport for your departure and destination, and FlightPath will show you a simulated route.</p>""")
+            bind(st.selectbox, "dep", "Departure", after=_route_changed, options=md.AIRPORT_CODES, format_func=md.airport_label)
+            bind(st.selectbox, "arr", "Destination", after=_route_changed, options=md.AIRPORT_CODES, format_func=md.airport_label)
+            if ss.dep == ss.arr:
+                st.warning("Departure and destination must be different.")
+            st.button("Find Optimal Route", type="primary", on_click=find_route, key="find_route")
 
     pts = [xy(ss.dep), xy(ss.arr)]
     plan = md.plan_route(pts, env_blockers()) if ss.dep != ss.arr else None
     found = ss.route_found and plan is not None
+    # dashed line = the straight path the optimized route had to avoid (only when they differ)
+    alt = plan["direct_segments"] if found and plan["direct_km"] != plan["optimized_km"] else None
 
     with center:
-        ui.render_map(ui.build_map(**map_env(), dep=ss.dep, arr=ss.arr,
-                                   active=plan["optimized_segments"] if found else None), height=440, key="map_home")
+        ui.render_map(ui.build_map(**map_env(), dep=ss.dep, arr=ss.arr, original=alt,
+                                   active=plan["optimized_segments"] if found else None), height=500, key="map_home")
+        ui.legend_strip()
 
     with right:
         with st.container(key="card_summary"):
@@ -242,6 +246,13 @@ def page_home():
             ui.summary_card(ss.dep, ss.arr, km, md.fmt_time(km, ss.speed) if found else None, found,
                             "Simulated demonstration data. Not for navigation." if found
                             else "Select Find Optimal Route to see your simulated route.")
+
+    # Hidden until the passenger has searched for a route
+    if found:
+        assessed = md.assess_route(plan["optimized_segments"],
+                                   md.all_env(ss.zones, ss.obstacles, ss.zones_enabled), plan["direct_segments"])
+        with st.container(key="card_nearby"):
+            ui.nearby_section(assessed)
 
 
 def page_pilot():
@@ -425,7 +436,6 @@ def page_reroute_demo():
 
 def page_about():
     ui.top_bar("About FlightPath")
-    st.markdown("&nbsp;", unsafe_allow_html=True)
     with st.container(key="card_about_intro"):
         ui.html("""<div class="fp-h1">About FlightPath</div>
         <p class="fp-sub" style="max-width:780px">FlightPath is an educational flight route planning simulator developed as a software-based
