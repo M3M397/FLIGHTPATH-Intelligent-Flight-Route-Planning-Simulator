@@ -1,16 +1,16 @@
-"""FLIGHTPATH - airports, simulated environment and frontend stand-ins.
+"""FLIGHTPATH - airport data, simulated environment and A* route planning.
 
-Airport LOCATIONS are real (approximate coordinates, Pakistan + major world hubs).
-Everything else - routes, restricted zones, obstacles, weather - is SIMULATED.
-`plan_route()` is a *frontend stand-in*: it draws smooth curves and nudges them
-away from obstacles so the interface has something to show. It is NOT an A*
-implementation. Integration point for the real engine: replace its body and
-keep the same return shape.
+Airport locations are approximate real-world coordinates.
+Routes, restricted zones, obstacles and weather conditions are simulated.
 
-The simulated environment (weather, restricted airspace, obstacles) is defined ONCE in
-the structured tables below (`_COUNTRY_ENV`, `_OCEAN_WEATHER`). The map markers, the hover
-popups and the "Nearby airspace conditions" panel all read the same items via `all_env()`.
+The A* algorithm calculates optimized routes around active simulated hazards.
+The return structure of plan_route() is preserved for compatibility with app.py.
+
+The simulated environment is defined once in structured tables.
+Map markers, hover popups and nearby-condition analysis use all_env()
+as their shared source of environment data.
 """
+
 from __future__ import annotations
 
 import math
