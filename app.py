@@ -231,7 +231,11 @@ def page_home():
 
     pts = [xy(ss.dep), xy(ss.arr)]
     plan = md.plan_route(pts, env_blockers()) if ss.dep != ss.arr else None
-    found = ss.route_found and plan is not None
+    found = (
+    ss.route_found
+    and plan is not None
+    and plan["optimized_clear"]
+)
     # dashed line = the straight path the optimized route had to avoid (only when they differ)
     alt = plan["direct_segments"] if found and plan["direct_km"] != plan["optimized_km"] else None
 
