@@ -1,0 +1,92 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}</style></head>
+<body><div id="root"></div>
+<script>
+(function () {
+  const root = document.getElementById("root");
+  const send = (type, data) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data || {}), "*");
+  let FULL = [1000, 383], BOX = null, lastBox = null, KMU = 40, vb = null;
+  let svg = null, wrap = null, clickable = false, frameH = 450;
+
+  function aspect() { return Math.max(root.clientWidth, 300) / frameH; }
+  function fit(box) {
+    const bw = box[2] - box[0], bh = box[3] - box[1], a = aspect();
+    const w = Math.max(bw, bh * a, 20), h = w / a;
+    return [(box[0] + box[2]) / 2 - w / 2, (box[1] + box[3]) / 2 - h / 2, w, h];
+  }
+  function world() { const a = aspect(), w = FULL[0], h = w / a; return [0, FULL[1] / 2 - h / 2, w, h]; }
+  function clamp() {
+    const a = aspect();
+    vb[2] = Math.min(FULL[0], Math.max(8, vb[2])); vb[3] = vb[2] / a;
+    vb[0] = Math.min(FULL[0] - vb[2], Math.max(0, vb[0]));
+    vb[1] = vb[3] >= FULL[1] ? (FULL[1] - vb[3]) / 2 : Math.min(FULL[1] - vb[3], Math.max(0, vb[1]));
+  }
+  function niceKm(kmPerPx) {
+    const target = kmPerPx * 110, steps = [1,2,5,10,20,25,50,100,200,250,500,1000,2000,2500,5000,10000];
+    let best = steps[0]; for (const s of steps) if (s <= target) best = s; return best;
+  }
+  function apply() {
+    if (!svg) return;
+    svg.setAttribute("viewBox", vb.join(" "));
+    const bar = root.querySelector(".scale .bar"), lbl = root.querySelector(".scale .lbl");
+    if (bar && lbl) {
+      const kmPerPx = (vb[2] / root.clientWidth) * KMU, km = niceKm(kmPerPx);
+      bar.style.width = Math.max(20, km / kmPerPx) + "px";
+      lbl.textContent = km.toLocaleString() + " km";
+    }
+  }
+  function zoom(f, cx, cy) {
+    cx = cx == null ? vb[0] + vb[2] / 2 : cx; cy = cy == null ? vb[1] + vb[3] / 2 : cy;
+    const rx = (cx - vb[0]) / vb[2], ry = (cy - vb[1]) / vb[3];
+    vb[2] *= f; vb[3] = vb[2] / aspect(); vb[0] = cx - rx * vb[2]; vb[1] = cy - ry * vb[3]; clamp(); apply();
+  }
+  function toSvg(ev) {
+    const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+    return p.matrixTransform(svg.getScreenCTM().inverse());
+  }
+  let down = null;
+  window.addEventListener("mousemove", e => {
+    if (!down || !svg) return;
+    const dx = e.clientX - down.x, dy = e.clientY - down.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) down.moved = true;
+    if (down.moved) {
+      const k = down.vb[2] / svg.getBoundingClientRect().width;
+      vb[0] = down.vb[0] - dx * k; vb[1] = down.vb[1] - dy * k; clamp(); apply();
+    }
+  });
+  window.addEventListener("mouseup", e => {
+    if (down && !down.moved && clickable && svg && svg.contains(e.target)) {
+      const p = toSvg(e);
+      send("streamlit:setComponentValue", {value: {x: p.x, y: p.y, t: Date.now()}, dataType: "json"});
+    }
+    down = null;
+  });
+  function bind() {
+    svg = root.querySelector("svg"); wrap = root.querySelector(".wrap"); if (!svg || !wrap) return;
+    FULL = wrap.dataset.full.split(",").map(Number); KMU = parseFloat(wrap.dataset.kmunit);
+    BOX = wrap.dataset.box.split(",").map(Number);
+    if (wrap.dataset.box !== lastBox || !vb) { vb = fit(BOX); lastBox = wrap.dataset.box; }
+    clamp(); apply();
+    root.querySelectorAll(".zoom button").forEach(b => b.addEventListener("click", e => {
+      e.stopPropagation(); const z = b.dataset.z;
+      if (z === "in") zoom(0.7); else if (z === "out") zoom(1.4);
+      else if (z === "world") { vb = world(); clamp(); apply(); }
+      else { vb = fit(BOX); clamp(); apply(); }
+    }));
+    svg.addEventListener("wheel", e => { e.preventDefault(); const p = toSvg(e); zoom(e.deltaY < 0 ? 0.85 : 1.18, p.x, p.y); }, {passive: false});
+    svg.addEventListener("mousedown", e => { down = {x: e.clientX, y: e.clientY, vb: vb.slice(), moved: false}; });
+    svg.style.cursor = clickable ? "crosshair" : "grab";
+  }
+  window.addEventListener("message", e => {
+    if (!e.data || e.data.type !== "streamlit:render") return;
+    const a = e.data.args || {};
+    clickable = !!a.clickable; frameH = a.height || 450;
+    root.innerHTML = a.html || "";
+    bind();
+    send("streamlit:setFrameHeight", {height: frameH});
+  });
+  send("streamlit:componentReady", {apiVersion: 1});
+  send("streamlit:setFrameHeight", {height: 450});
+})();
+</script></body></html>
