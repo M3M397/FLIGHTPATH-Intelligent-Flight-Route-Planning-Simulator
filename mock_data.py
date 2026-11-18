@@ -6,6 +6,10 @@ Everything else - routes, restricted zones, obstacles, weather - is SIMULATED.
 away from obstacles so the interface has something to show. It is NOT an A*
 implementation. Integration point for the real engine: replace its body and
 keep the same return shape.
+
+The simulated environment (weather, restricted airspace, obstacles) is defined ONCE in
+the structured tables below (`_COUNTRY_ENV`, `_OCEAN_WEATHER`). The map markers, the hover
+popups and the "Nearby airspace conditions" panel all read the same items via `all_env()`.
 """
 from __future__ import annotations
 
@@ -97,17 +101,200 @@ SECTORS = {
     "Central Asia": project(40.0, 67.0),
 }
 
-WEATHER = [
-    {"x": project(22.5, 68.5)[0], "y": project(22.5, 68.5)[1], "r": 7.0, "kind": "storm"},
-    {"x": project(35.0, 70.0)[0], "y": project(35.0, 70.0)[1], "r": 6.0, "kind": "cloud"},
-    {"x": project(27.0, 47.0)[0], "y": project(27.0, 47.0)[1], "r": 9.0, "kind": "storm"},
-    {"x": project(45.0, -40.0)[0], "y": project(45.0, -40.0)[1], "r": 14.0, "kind": "storm"},
+# --- Weather conditions: symbol key + hover/card description --------------------------
+WX_CONDITIONS = {
+    "Thunderstorm": ("storm", "Simulated storm activity affecting route cost."),
+    "Heavy Rain": ("rain", "Simulated heavy rainfall reducing visibility along the corridor."),
+    "Strong Winds": ("wind", "Simulated strong-wind band raising fuel burn and route cost."),
+    "Fog": ("fog", "Simulated low-visibility fog layer affecting route cost."),
+}
+WX_RADIUS = {"Low": 2.6, "Moderate": 3.1, "High": 3.6}            # map units (~105-145 km)
+ZONE_RADIUS = {"Low": 1.9, "Medium": 2.3, "High": 2.7}             # preset zones are small (~75-110 km)
+ZONE_DESC = {
+    "Low": "Simulated advisory flight region with light restrictions.",
+    "Medium": "Simulated restricted flight region.",
+    "High": "Simulated no-fly region; routes are planned around it.",
+}
+OBSTACLE_DESC = [
+    "A simulated obstruction affecting the available route.",
+    "Simulated high-terrain obstruction in the flight corridor.",
+    "Simulated tall-structure cluster near the flight corridor.",
 ]
 
-_z = project(31.0, 65.0)
-_o = project(28.5, 74.3)
-DEFAULT_ZONES = [{"id": 1, "x": _z[0], "y": _z[1], "r": SEVERITY_R["Medium"], "sev": "Medium", "sector": "Demo zone"}]
-DEFAULT_OBSTACLES = [{"id": 2, "x": _o[0], "y": _o[1], "sector": "Demo obstacle"}]
+# --- Structured environment: EXACTLY one weather anomaly, one restricted zone and one
+# obstacle per represented country.  (lat, lon, ...) -> positions are approximate and
+# deliberately kept well away from the airports so no airport is ever enclosed.
+# country: {"wx": (lat, lon, condition, severity, region),
+#           "rz": (lat, lon, severity, region),
+#           "ob": (lat, lon, region)}
+_COUNTRY_ENV = {
+    "Pakistan":     {"wx": (28.5, 69.5, "Fog", "Moderate", "Upper Sindh plains"),
+                     "rz": (27.0, 65.0, "High", "Southern Balochistan"),
+                     "ob": (27.5, 68.0, "Kirthar range")},
+    "India":        {"wx": (18.5, 74.5, "Heavy Rain", "High", "Western Ghats"),
+                     "rz": (27.5, 76.5, "Medium", "Northern plains"),
+                     "ob": (13.5, 78.0, "Southern plateau")},
+    "Afghanistan":  {"wx": (36.5, 70.5, "Strong Winds", "Moderate", "Hindu Kush"),
+                     "rz": (32.8, 63.0, "Medium", "Southern Afghanistan"),
+                     "ob": (34.2, 62.0, "Western Afghanistan")},
+    "Iran":         {"wx": (30.5, 58.0, "Strong Winds", "Low", "Eastern Iran"),
+                     "rz": (29.3, 53.3, "Medium", "Southern Iran"),
+                     "ob": (35.8, 50.5, "Northern Iran")},
+    "Saudi Arabia": {"wx": (28.5, 40.5, "Strong Winds", "Moderate", "Northern Saudi Arabia"),
+                     "rz": (19.5, 48.5, "Low", "Empty Quarter"),
+                     "ob": (27.5, 44.5, "Central Saudi Arabia")},
+    "Turkey":       {"wx": (38.5, 42.5, "Thunderstorm", "Moderate", "Eastern Anatolia"),
+                     "rz": (37.5, 38.5, "Medium", "Southeastern Turkey"),
+                     "ob": (40.2, 38.5, "Black Sea highlands")},
+    "Kazakhstan":   {"wx": (50.5, 77.0, "Strong Winds", "Low", "Eastern steppe"),
+                     "rz": (45.5, 59.5, "Medium", "Aral region"),
+                     "ob": (49.5, 55.5, "Western Kazakhstan")},
+    "China":        {"wx": (28.5, 105.5, "Heavy Rain", "Moderate", "Southwestern China"),
+                     "rz": (42.5, 91.0, "High", "Xinjiang"),
+                     "ob": (31.5, 91.5, "Tibetan Plateau")},
+    "Russia":       {"wx": (66.0, 70.0, "Strong Winds", "Moderate", "Western Siberia"),
+                     "rz": (58.5, 125.0, "Low", "Eastern Siberia"),
+                     "ob": (56.0, 40.0, "European Russia")},
+    "Egypt":        {"wx": (30.3, 27.0, "Fog", "Low", "Western Desert coast"),
+                     "rz": (23.5, 32.5, "Medium", "Southern Egypt"),
+                     "ob": (24.5, 26.5, "Western Desert")},
+    "South Africa": {"wx": (-30.5, 30.0, "Heavy Rain", "Moderate", "KwaZulu-Natal"),
+                     "rz": (-33.2, 22.5, "Low", "Southern coast"),
+                     "ob": (-25.0, 21.5, "Kalahari region")},
+    "United States": {"wx": (33.0, -90.0, "Thunderstorm", "High", "Southern plains"),
+                      "rz": (44.0, -110.0, "Medium", "Northern Rockies"),
+                      "ob": (36.5, -108.5, "Colorado Plateau")},
+    "Brazil":       {"wx": (-3.5, -60.0, "Heavy Rain", "Moderate", "Amazon basin"),
+                     "rz": (-18.0, -47.5, "Low", "Central Brazil"),
+                     "ob": (-8.0, -39.5, "Northeastern Brazil")},
+    "Australia":    {"wx": (-17.5, 131.0, "Thunderstorm", "Moderate", "Northern Territory"),
+                     "rz": (-28.5, 122.5, "Medium", "Western Australia"),
+                     "ob": (-31.5, 141.5, "Southeastern Australia")},
+}
+
+# Oceanic weather anomalies (separate from the country-based ones; no ocean zones/obstacles)
+_OCEAN_WEATHER = [
+    (23.2, 63.8, "Thunderstorm", "Moderate", "Arabian Sea"),
+    (14.0, 88.5, "Heavy Rain", "Moderate", "Bay of Bengal"),
+    (-12.0, 80.0, "Thunderstorm", "Low", "Indian Ocean"),
+    (47.5, -35.0, "Strong Winds", "High", "North Atlantic"),
+    (38.0, -150.0, "Fog", "Low", "North Pacific"),
+    (-20.0, -15.0, "Heavy Rain", "Low", "South Atlantic"),
+    (-37.0, 160.0, "Strong Winds", "Moderate", "Tasman Sea"),
+]
+
+
+def _item(id_, kind, lat, lon, r, location, severity, description, *, condition=None, status=None,
+          country=None, custom=False):
+    x, y = project(lat, lon)
+    return {"id": id_, "kind": kind, "lat": lat, "lon": lon, "x": x, "y": y, "r": r,
+            "location": location, "severity": severity, "description": description,
+            "condition": condition, "status": status, "country": country, "custom": custom,
+            "icon": WX_CONDITIONS[condition][0] if condition else None}
+
+
+def _build_env():
+    """Built ONCE at import (module cache) - Streamlit reruns never duplicate anomalies."""
+    wx, rz, ob = [], [], []
+    for country, e in _COUNTRY_ENV.items():
+        lat, lon, cond, sev, region = e["wx"]
+        wx.append(_item(f"WX-{len(wx) + 1:02d}", "weather", lat, lon, WX_RADIUS[sev], f"{region}, {country}",
+                        sev, WX_CONDITIONS[cond][1], condition=cond, country=country))
+        lat, lon, sev, region = e["rz"]
+        rz.append(_item(f"RZ-{len(rz) + 1:02d}", "zone", lat, lon, ZONE_RADIUS[sev], f"{region}, {country}",
+                        sev, ZONE_DESC[sev], status="Active", country=country))
+        lat, lon, region = e["ob"]
+        ob.append(_item(f"OBS-{len(ob) + 1:02d}", "obstacle", lat, lon, OBSTACLE_R, f"{region}, {country}",
+                        None, OBSTACLE_DESC[len(ob) % len(OBSTACLE_DESC)], status="Active", country=country))
+    for lat, lon, cond, sev, region in _OCEAN_WEATHER:
+        wx.append(_item(f"WX-{len(wx) + 1:02d}", "weather", lat, lon, WX_RADIUS[sev] + 0.6, region, sev,
+                        WX_CONDITIONS[cond][1], condition=cond))
+    # integrity check: one of each per represented country, ocean weather has no country
+    for c in _COUNTRY_ENV:
+        assert sum(1 for i in wx if i["country"] == c) == 1
+        assert sum(1 for i in rz if i["country"] == c) == 1
+        assert sum(1 for i in ob if i["country"] == c) == 1
+    return wx, rz, ob
+
+
+ENV_WEATHER, ENV_ZONES, ENV_OBSTACLES = _build_env()
+WEATHER = [{"x": w["x"], "y": w["y"], "r": w["r"], "kind": w["icon"]} for w in ENV_WEATHER]  # for routing
+
+# User-editable layer (Pilot Mode add/remove + map clicks). Starts empty: the preset
+# environment above is the default scenery.
+DEFAULT_ZONES: list[dict] = []
+DEFAULT_OBSTACLES: list[dict] = []
+
+# Country names drawn on the map (approximate interior anchor points, single typography)
+COUNTRY_LABELS = [
+    ("Canada", 59.0, -100.0), ("United States", 39.5, -98.0), ("Mexico", 23.5, -102.0),
+    ("Colombia", 3.5, -73.0), ("Peru", -9.5, -74.5), ("Brazil", -10.5, -53.0), ("Argentina", -37.0, -65.0),
+    ("United Kingdom", 54.2, -2.5), ("France", 46.7, 2.5), ("Spain", 40.0, -3.5), ("Germany", 51.0, 10.3),
+    ("Ukraine", 49.0, 32.0), ("Sweden", 62.5, 15.5), ("Turkey", 39.0, 34.5), ("Russia", 62.0, 95.0),
+    ("Kazakhstan", 48.0, 67.0), ("Mongolia", 46.8, 103.0), ("China", 35.5, 103.0), ("Japan", 36.5, 138.0),
+    ("Egypt", 26.5, 29.8), ("Saudi Arabia", 24.0, 44.5), ("Iran", 32.8, 53.5), ("Afghanistan", 34.0, 66.5),
+    ("Pakistan", 30.4, 69.2), ("India", 22.5, 81.0), ("Thailand", 15.3, 101.0), ("Indonesia", -2.0, 114.0),
+    ("Australia", -25.5, 134.0), ("Algeria", 28.0, 2.5), ("Libya", 27.0, 17.5), ("Mali", 17.0, -3.5),
+    ("Chad", 15.5, 18.5), ("Sudan", 15.5, 29.5), ("Nigeria", 9.5, 8.5), ("Ethiopia", 8.5, 39.5),
+    ("DR Congo", -2.0, 23.5), ("South Africa", -29.5, 24.5),
+]
+
+# Obstacle / zone tooltip fallbacks for user-created objects
+_USER_ZONE_DESC = "User-defined simulated restricted flight region."
+_USER_OB_DESC = "User-defined simulated obstruction affecting the available route."
+
+
+def all_env(zones=(), obstacles=(), zones_enabled: bool = True) -> list[dict]:
+    """Every simulated environment item currently on the map (preset + user-created).
+
+    Single source of truth for map markers, hover popups and nearby-conditions analysis.
+    """
+    items = list(ENV_WEATHER)
+    if zones_enabled:
+        items += ENV_ZONES
+    items += ENV_OBSTACLES
+    for z in zones:
+        if not zones_enabled:
+            break
+        lat, lon = unproject(z["x"], z["y"])
+        items.append(_item(f"RZ-U{z['id']:02d}", "zone", lat, lon, z["r"], z.get("sector", "Custom location"),
+                           z["sev"], _USER_ZONE_DESC, status="Active", custom=True))
+    for o in obstacles:
+        lat, lon = unproject(o["x"], o["y"])
+        items.append(_item(f"OBS-U{o['id']:02d}", "obstacle", lat, lon, OBSTACLE_R,
+                           o.get("sector", "Custom location"), None, _USER_OB_DESC, status="Active", custom=True))
+    return items
+
+
+# --- Route proximity rule (frontend mock) ----------------------------------------------
+# For each item we take the shortest geographic distance from the drawn route to the item's
+# centre and subtract the item's own footprint radius -> "edge clearance".
+#   edge clearance <= 0 km          -> AFFECTS the route (route passes through it)
+#   0 < clearance <= NEAR_KM        -> NEAR the route (inside the route corridor)
+#   clearance > NEAR_KM             -> not relevant (never listed)
+NEAR_KM = 300.0
+
+
+def assess_route(segments, items, direct_segments=None) -> list[dict]:
+    """Classify simulated items relative to a route. Simulation only - not hazard detection."""
+    def pts_of(segs):
+        return [unproject(*p) for seg in segs for p in sample(seg, 60)]
+
+    pts = pts_of(segments)
+    direct_pts = pts_of(direct_segments) if direct_segments else None
+
+    def clearance(plist, it):
+        foot = it["r"] * KM_PER_UNIT_EQ * max(math.cos(math.radians(it["lat"])), 0.2)
+        return min(haversine_km(la, lo, it["lat"], it["lon"]) for la, lo in plist) - foot
+
+    out = []
+    for it in items:
+        edge = clearance(pts, it)
+        rel = "affects" if edge <= 0 else "near" if edge <= NEAR_KM else "clear"
+        detour = bool(direct_pts) and rel != "affects" and clearance(direct_pts, it) <= 0
+        out.append({**it, "relation": rel, "clearance_km": max(edge, 0.0), "detour": detour})
+    return out
+
 
 ROUTE_TYPES = ["Shortest Distance", "Fastest Time", "Fuel Efficient", "Weather Avoidance"]
 AIRCRAFT = {
@@ -168,8 +355,8 @@ def _min_clearance(segments, blockers):
 def blockers_for(zones, obstacles, zones_enabled=True, weather=None):
     out = []
     if zones_enabled:
-        out += [{"x": z["x"], "y": z["y"], "r": z["r"] + 1.0} for z in zones]
-    out += [{"x": o["x"], "y": o["y"], "r": OBSTACLE_R + 0.8} for o in obstacles]
+        out += [{"x": z["x"], "y": z["y"], "r": z["r"] + 1.0} for z in list(zones) + ENV_ZONES]
+    out += [{"x": o["x"], "y": o["y"], "r": OBSTACLE_R + 0.8} for o in list(obstacles) + ENV_OBSTACLES]
     if weather:
         out += [{"x": w["x"], "y": w["y"], "r": w["r"]} for w in weather]
     return out
