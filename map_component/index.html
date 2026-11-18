@@ -1,6 +1,15 @@
 <!doctype html>
 <html><head><meta charset="utf-8">
-<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}</style></head>
+<style>
+html,body{margin:0;padding:0;background:transparent;overflow:hidden}
+#tip{position:fixed;z-index:50;display:none;pointer-events:none;max-width:236px;padding:9px 12px 10px;border-radius:10px;
+ background:rgba(25,34,49,.97);border:1px solid rgba(255,255,255,.3);box-shadow:0 6px 18px rgba(0,0,0,.35);
+ font:400 11px/1.45 'Montserrat','Segoe UI',sans-serif;color:rgba(255,255,255,.92)}
+#tip .th{font-weight:700;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#E7B9C4;margin-bottom:5px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.14)}
+#tip .tr{display:flex;gap:6px}
+#tip .tr span{flex:none;min-width:74px;font-weight:300;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#98878F;padding-top:1px}
+#tip .td{margin:4px 0;font-weight:300;font-size:10.5px;color:rgba(255,255,255,.78)}
+</style></head>
 <body><div id="root"></div>
 <script>
 (function () {
@@ -45,6 +54,26 @@
     const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
     return p.matrixTransform(svg.getScreenCTM().inverse());
   }
+  const tip = document.createElement("div"); tip.id = "tip"; document.body.appendChild(tip);
+  function placeTip(e) {
+    const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    if (x + w > window.innerWidth - 4) x = e.clientX - w - pad;
+    if (y + h > window.innerHeight - 4) y = e.clientY - h - pad;
+    tip.style.left = Math.max(4, x) + "px"; tip.style.top = Math.max(4, y) + "px";
+  }
+  function hideTip() { tip.style.display = "none"; }
+  function tipTarget(e) { return e.target && e.target.closest ? e.target.closest("[data-tip]") : null; }
+  document.addEventListener("mouseover", e => {
+    const t = tipTarget(e);
+    if (!t || (down && down.moved)) return;
+    tip.innerHTML = t.getAttribute("data-tip"); tip.style.display = "block"; placeTip(e);
+  });
+  document.addEventListener("mousemove", e => {
+    if (tip.style.display === "block") { if (tipTarget(e) && !(down && down.moved)) placeTip(e); else hideTip(); }
+  });
+  document.addEventListener("mouseout", e => { if (!e.relatedTarget) hideTip(); });
+  document.addEventListener("mousedown", hideTip);
   let down = null;
   window.addEventListener("mousemove", e => {
     if (!down || !svg) return;
@@ -82,7 +111,7 @@
     if (!e.data || e.data.type !== "streamlit:render") return;
     const a = e.data.args || {};
     clickable = !!a.clickable; frameH = a.height || 450;
-    root.innerHTML = a.html || "";
+    hideTip(); root.innerHTML = a.html || "";
     bind();
     send("streamlit:setFrameHeight", {height: frameH});
   });
