@@ -106,16 +106,21 @@ def chips(labels: list[str], hot: bool = False) -> str:
 
 
 def env_list(zones, obstacles, zones_enabled: bool) -> None:
+    """Pilot Mode list: user-created objects + a one-line summary of the preset simulated environment."""
     rows = []
     for o in obstacles:
-        rows.append(f'<div class="fp-env"><span>▲ Obstacle #{o["id"]}</span><span>{_html.escape(o.get("sector", "Preset"))}</span></div>')
+        rows.append(f'<div class="fp-env"><span>▲ Obstacle #{o["id"]}</span><span>{_html.escape(o.get("sector", "Custom"))}</span></div>')
     for z in zones:
         state = "" if zones_enabled else " · hidden"
         rows.append(f'<div class="fp-env"><span>▨ Restricted zone #{z["id"]}</span>'
                     f'<span>{z["sev"]} severity{state}</span></div>')
-    for w in md.WEATHER:
-        rows.append(f'<div class="fp-env"><span>☁ Weather anomaly</span><span>{w["kind"]} · advisory</span></div>')
-    html(f'<div class="fp-envlist">{"".join(rows)}</div>')
+    if not rows:
+        rows.append('<div class="fp-env"><span>No custom objects yet</span><span>use the buttons or the map</span></div>')
+    countries = len(md._COUNTRY_ENV)
+    ocean = sum(1 for w in md.ENV_WEATHER if w["country"] is None)
+    html(f'<div class="fp-envlist">{"".join(rows)}</div>'
+         f'<div class="fp-note">Preset simulated airspace: <b>{countries}</b> countries × (1 weather anomaly, 1 restricted zone, '
+         f'1 obstacle) + <b>{ocean}</b> oceanic weather anomalies. Hover any symbol on the map for details.</div>')
 
 
 def comparison_table(rows: list[tuple[str, str, str]], best_col: int | None) -> None:
@@ -139,6 +144,150 @@ def steps(current: int) -> None:
 def stat_cards(items: list[tuple[str, str, str]]) -> None:
     cells = "".join(f'<div><div class="fp-k">{k}</div><div class="fp-v {t}">{v}</div></div>' for k, v, t in items)
     html(f'<div class="fp-cards4">{cells}</div>')
+
+
+# --------------------------------------------------------------------------
+# Environment symbols (shared by the map, the legend and the nearby-conditions cards)
+# --------------------------------------------------------------------------
+_CLOUD = "M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
+_WX_PATHS = {
+    "storm": '<path d="M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"/><path d="m13 12-3 5h4l-3 5"/>',
+    "rain": f'<path d="{_CLOUD}"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/>',
+    "wind": '<path d="M12.8 19.6A2 2 0 1 0 14 16H2"/><path d="M17.5 8a2.5 2.5 0 1 1 2 4H2"/><path d="M9.8 4.4A2 2 0 1 1 11 8H2"/>',
+    "fog": f'<path d="{_CLOUD}"/><path d="M16 17H7"/><path d="M17 21H9"/>',
+}
+_ICON_CACHE: dict[str, str] = {}
+
+
+def _data_uri(svg: str) -> str:
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+
+
+def _hex_pts(cx, cy, r) -> str:
+    return " ".join(f"{cx + r * math.cos(math.radians(60 * i + 30)):.2f},{cy + r * math.sin(math.radians(60 * i + 30)):.2f}" for i in range(6))
+
+
+def icon_uri(name: str) -> str:
+    """Small, consistent FlightPath-styled icons as <img>-safe data URIs (Streamlit-markdown friendly)."""
+    if name in _ICON_CACHE:
+        return _ICON_CACHE[name]
+    W = 'xmlns="http://www.w3.org/2000/svg"'
+    if name in _WX_PATHS:
+        svg = (f'<svg {W} viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" '
+               f'stroke-linecap="round" stroke-linejoin="round">{_WX_PATHS[name]}</svg>')
+    elif name == "obstacle":
+        svg = (f'<svg {W} viewBox="0 0 24 24"><polygon points="12,3 21.5,20 2.5,20" fill="#192231" stroke="#fff" stroke-width="1.8" '
+               f'stroke-linejoin="round"/><text x="12" y="17" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" '
+               f'font-family="Montserrat,Arial,sans-serif">!</text></svg>')
+    elif name == "zone":
+        svg = (f'<svg {W} viewBox="0 0 24 24"><defs><pattern id="h" width="4" height="4" patternUnits="userSpaceOnUse" '
+               f'patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="4" stroke="#D98BA0" stroke-width="1.2"/></pattern></defs>'
+               f'<polygon points="{_hex_pts(12, 12, 9.5)}" fill="rgba(152,94,109,.25)" stroke="#D98BA0" stroke-width="1.6"/>'
+               f'<polygon points="{_hex_pts(12, 12, 9.5)}" fill="url(#h)" opacity=".6"/></svg>')
+    elif name in ("dep", "arr"):
+        fill = "#192231" if name == "dep" else "#985E6D"
+        svg = (f'<svg {W} viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#fff" stroke-opacity=".28"/>'
+               f'<circle cx="12" cy="12" r="5.5" fill="{fill}" stroke="#fff" stroke-width="2.6"/></svg>')
+    elif name == "waypoint":
+        svg = (f'<svg {W} viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" transform="rotate(45 12 12)" '
+               f'fill="#192231" stroke="#fff" stroke-width="2.2"/></svg>')
+    elif name == "route":
+        svg = (f'<svg {W} viewBox="0 0 32 24"><line x1="3" y1="12" x2="29" y2="12" stroke="#E2A3B3" stroke-opacity=".35" stroke-width="9" stroke-linecap="round"/>'
+               f'<line x1="3" y1="12" x2="29" y2="12" stroke="#985E6D" stroke-width="4" stroke-linecap="round"/></svg>')
+    elif name == "alt":
+        svg = (f'<svg {W} viewBox="0 0 32 24"><line x1="3" y1="12" x2="29" y2="12" stroke="#fff" stroke-opacity=".8" stroke-width="2.4" '
+               f'stroke-dasharray="5 4.5" stroke-linecap="round"/></svg>')
+    elif name == "weather":   # shaded region + symbol badge
+        svg = (f'<svg {W} viewBox="0 0 24 24"><defs><radialGradient id="g"><stop offset="0" stop-color="#E6C6D0" stop-opacity=".8"/>'
+               f'<stop offset=".6" stop-color="#985E6D" stop-opacity=".45"/><stop offset="1" stop-color="#985E6D" stop-opacity="0"/></radialGradient></defs>'
+               f'<circle cx="12" cy="12" r="11.5" fill="url(#g)"/><circle cx="12" cy="12" r="7" fill="#192231" fill-opacity=".92" stroke="#985E6D" stroke-width="1.3"/>'
+               f'<g transform="translate(5.5,5.5) scale(.55)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">{_WX_PATHS["storm"]}</g></svg>')
+    else:
+        svg = f'<svg {W} viewBox="0 0 24 24"/>'
+    _ICON_CACHE[name] = _data_uri(svg)
+    return _ICON_CACHE[name]
+
+
+def _item_icon(it) -> str:
+    return icon_uri(it["icon"] if it["kind"] == "weather" else it["kind"])
+
+
+def tip_html(it) -> str:
+    """Hover-popup markup for one environment item (same data that drives its map marker)."""
+    e = _html.escape
+    row = lambda k, v: f'<div class="tr"><span>{e(k)}</span>{e(str(v))}</div>'
+    if it["kind"] == "obstacle":
+        head, rows = "Simulated Obstacle", [row("ID", it["id"]), row("Location", it["location"])]
+        rows += [f'<div class="td">{e(it["description"])}</div>', row("Status", it["status"])]
+    elif it["kind"] == "zone":
+        head, rows = "Restricted Airspace", [row("ID", it["id"]), row("Location", it["location"]), row("Severity", it["severity"])]
+        rows += [f'<div class="td">{e(it["description"])}</div>', row("Status", it["status"])]
+    else:
+        head, rows = "Weather Anomaly", [row("ID", it["id"]), row("Location", it["location"]),
+                                         row("Condition", it["condition"]), row("Severity", it["severity"])]
+        rows += [f'<div class="td">{e(it["description"])}</div>']
+    return f'<div class="th">{e(head)}</div>' + "".join(rows)
+
+
+# --------------------------------------------------------------------------
+# Home: map legend + nearby airspace conditions
+# --------------------------------------------------------------------------
+_LEGEND = [("dep", "Departure Airport"), ("arr", "Destination Airport"), ("route", "Flight Route"),
+           ("alt", "Alternative Route"), ("obstacle", "Obstacle"), ("zone", "Restricted Airspace"),
+           ("weather", "Weather Anomaly"), ("waypoint", "Waypoint")]
+
+
+def legend_strip() -> None:
+    cells = "".join(f'<div class="fp-lg"><img src="{icon_uri(k)}" alt="">{t}</div>' for k, t in _LEGEND)
+    html(f'<div class="fp-legend"><div class="fp-legend-title">Map legend</div><div class="fp-legend-grid">{cells}</div></div>')
+
+
+_REL_ORDER = {"affects": 0, "near": 1}
+
+
+def _rel_text(r) -> tuple[str, str, str]:
+    km = int(round(r["clearance_km"], -1))
+    if r["relation"] == "affects":
+        return "affects", "Affects route", "The simulated route passes through this condition."
+    if r["detour"]:
+        return "near", "Near route", f"Route adjusts around it · about {km:,} km clearance."
+    return "near", "Near route", f"Located near the simulated route · about {km:,} km away."
+
+
+def nearby_section(assessed: list[dict], max_cards: int = 9) -> None:
+    e = _html.escape
+    rel = sorted((r for r in assessed if r["relation"] in _REL_ORDER), key=lambda r: (_REL_ORDER[r["relation"]], r["clearance_km"]))
+    n_aff = sum(r["relation"] == "affects" for r in rel)
+    n_near = len(rel) - n_aff
+    n_clear = len(assessed) - len(rel)
+    head = '<div class="fp-h2 fp-caps">Nearby Airspace Conditions</div>'
+    stats = (f'<div class="fp-chips" style="margin:.5rem 0 .2rem"><span class="fp-chip hot">{n_aff} affecting the route</span>'
+             f'<span class="fp-chip">{n_near} near the route</span><span class="fp-chip">{n_clear} not relevant</span></div>')
+    if not rel:
+        body = ('<div class="fp-nempty">No significant simulated anomalies detected near this route.</div>')
+    else:
+        cards = []
+        for r in rel[:max_cards]:
+            cls, tag, txt = _rel_text(r)
+            if r["kind"] == "weather":
+                title, sev = f'{r["condition"]} — {r["location"]}', f'{r["severity"]} severity'
+            elif r["kind"] == "zone":
+                title, sev = f'Restricted Zone — {r["location"]}', f'{r["severity"]} severity'
+            else:
+                title, sev = f'Simulated Obstacle — {r["location"]}', r["status"]
+            cards.append(
+                f'<div class="fp-ncard {cls}"><div class="fp-nhead"><img src="{_item_icon(r)}" alt="">'
+                f'<div class="fp-ntitle">{e(title)}</div></div>'
+                f'<div class="fp-nsev">{e(sev)} · <span>{e(r["id"])}</span></div>'
+                f'<div class="fp-ndesc">{e(r["description"])}</div>'
+                f'<div class="fp-nrel"><b class="{cls}">{tag}</b>{e(txt)}</div></div>')
+        extra = len(rel) - max_cards
+        more = f'<div class="fp-note" style="margin-top:.5rem">+ {extra} more simulated condition(s) near this route.</div>' if extra > 0 else ""
+        body = f'<div class="fp-ngrid">{"".join(cards)}</div>{more}'
+    note = (f'<div class="fp-note" style="margin-top:.7rem">Proximity rule: <b>affects</b> = the route passes through the item; '
+            f'<b>near</b> = within {int(md.NEAR_KM)} km of the route; anything farther is not listed. '
+            f'Simulated demonstration data — not real aviation hazard detection.</div>')
+    html(head + stats + body + note)
 
 
 # --------------------------------------------------------------------------
@@ -191,6 +340,8 @@ svg{width:100%;height:100%;display:block}
 .scale{position:absolute;left:16px;bottom:12px;color:rgba(255,255,255,.85);font-size:10px;letter-spacing:.08em;pointer-events:none}
 .scale .bar{height:6px;border:1.5px solid rgba(255,255,255,.85);border-top:0;width:100px;margin-bottom:3px}
 .cap{position:absolute;right:14px;bottom:10px;font-size:9.5px;font-weight:300;letter-spacing:.12em;color:rgba(255,255,255,.6);text-transform:uppercase}
+.cn{pointer-events:none;font-weight:400}
+.env:hover{filter:brightness(1.3)}
 @keyframes sp{to{transform:rotate(360deg)}}
 """
 
@@ -232,7 +383,7 @@ def build_map(
     NS = 'vector-effect="non-scaling-stroke"'
     svg = [f"""<svg viewBox="0 0 {md.MAP_W:.0f} {md.MAP_H:.1f}" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <linearGradient id="land" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B4260"/><stop offset="1" stop-color="#2A3148"/></linearGradient>
+      <linearGradient id="land" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="{md.MAP_H:.1f}"><stop offset="0" stop-color="#3B4260"/><stop offset="1" stop-color="#2A3148"/></linearGradient>
       <pattern id="hatch" width="{7 * k:.3f}" height="{7 * k:.3f}" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="{7 * k:.3f}" stroke="#D98BA0" stroke-width="{2 * k:.3f}"/></pattern>
       <radialGradient id="storm"><stop offset="0" stop-color="#E6C6D0" stop-opacity=".75"/><stop offset=".55" stop-color="#985E6D" stop-opacity=".45"/><stop offset="1" stop-color="#985E6D" stop-opacity="0"/></radialGradient>
       <radialGradient id="cloud"><stop offset="0" stop-color="#fff" stop-opacity=".6"/><stop offset=".6" stop-color="#C9BEC4" stop-opacity=".3"/><stop offset="1" stop-color="#98878F" stop-opacity="0"/></radialGradient>
@@ -245,35 +396,57 @@ def build_map(
     for lat in range(-50, 81, 10):
         y = (md.LAT_TOP - lat) * md.SCALE
         svg.append(f'<line x1="0" y1="{y:.1f}" x2="{md.MAP_W:.0f}" y2="{y:.1f}" stroke="#fff" stroke-opacity=".05" stroke-width="1" {NS}/>')
-    svg.append(f'<path d="{world_data.WORLD_PATH}" fill="url(#land)" stroke="#fff" stroke-opacity=".2" stroke-width="0.8" stroke-linejoin="round" {NS}/>')
-    svg.append(f'<path d="{world_data.PAKISTAN_PATH}" fill="#985E6D" fill-opacity=".20" stroke="#fff" stroke-opacity=".55" stroke-width="1.4" stroke-linejoin="round" {NS}/>')
-    px_, py_ = md.project(29.6, 69.6)
-    svg.append(f'<text x="{px_:.2f}" y="{py_:.2f}" text-anchor="middle" font-size="{20 * k:.3f}" font-weight="200" letter-spacing="{6 * k:.3f}" fill="#fff" fill-opacity=".38">PAKISTAN</text>')
-    for w in md.WEATHER:
-        svg.append(f'<circle cx="{w["x"]:.2f}" cy="{w["y"]:.2f}" r="{w["r"]}" fill="url(#{w["kind"]})" filter="url(#blur)"/>')
+    # All countries - including Pakistan, whose polygon is stored separately - use the SAME fill and border style.
+    land = 'fill="url(#land)" stroke="#fff" stroke-opacity=".2" stroke-width="0.8" stroke-linejoin="round"'
+    svg.append(f'<path d="{world_data.WORLD_PATH}" {land} {NS}/>')
+    svg.append(f'<path d="{world_data.PAKISTAN_PATH}" {land} {NS}/>')
+    for name, la, lo in md.COUNTRY_LABELS:
+        lx, ly = md.project(la, lo)
+        svg.append(f'<text class="cn" x="{lx:.2f}" y="{ly:.2f}" text-anchor="middle" font-size="{8.4 * k:.3f}" letter-spacing="{1.3 * k:.3f}" '
+                   f'fill="#C7BAC1" fill-opacity=".7" stroke="#18202F" stroke-opacity=".6" stroke-width="{2.4 * k:.3f}" '
+                   f'stroke-linejoin="round" paint-order="stroke">{_html.escape(name.upper())}</text>')
 
     def zone(z, sev="High"):
         op = _SEV_OPACITY.get(sev, .8)
         pts = _hex(z["x"], z["y"], z["r"])
         return (f'<polygon points="{pts}" fill="rgba(152,94,109,.18)" stroke="#D98BA0" stroke-width="1.6" stroke-opacity="{op}" {NS}/>'
                 f'<polygon points="{pts}" fill="url(#hatch)" opacity="{op * .55:.2f}"/>')
-    if zones_enabled:
-        for z in zones:
-            svg.append(zone(z, z["sev"]))
+
+    # Every item below comes from md.all_env(): the marker and its hover popup share one record.
+    for it in md.all_env(zones, obstacles, zones_enabled):
+        x, y, tip = it["x"], it["y"], _html.escape(tip_html(it), quote=True)
+        if it["kind"] == "weather":
+            glow = "storm" if it["icon"] in ("storm", "rain") else "cloud"
+            s_ = 15 * k / 24
+            svg.append(
+                f'<g class="env" data-tip="{tip}">'
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{it["r"]}" fill="url(#{glow})" filter="url(#blur)"/>'
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{it["r"] * .8:.2f}" fill="none" stroke="#E7B9C4" stroke-opacity=".3" stroke-width="1" stroke-dasharray="3 3" {NS}/>'
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{10 * k:.3f}" fill="#192231" fill-opacity=".92" stroke="#985E6D" stroke-width="1.4" {NS}/>'
+                f'<g transform="translate({x - 12 * s_:.3f},{y - 12 * s_:.3f}) scale({s_:.4f})" fill="none" stroke="#fff" stroke-width="2.1" '
+                f'stroke-linecap="round" stroke-linejoin="round">{_WX_PATHS[it["icon"]]}</g>'
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{max(it["r"] * .7, 11 * k):.3f}" fill="transparent"/></g>')
+        elif it["kind"] == "zone":
+            svg.append(f'<g class="env" data-tip="{tip}">{zone(it, it["severity"])}</g>')
+        else:
+            h = 9 * k
+            svg.append(
+                f'<g class="env" data-tip="{tip}"><polygon points="{x:.2f},{y - h:.2f} {x + h * .95:.2f},{y + h * .75:.2f} {x - h * .95:.2f},{y + h * .75:.2f}" '
+                f'fill="#192231" fill-opacity=".9" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" {NS}/>'
+                f'<text x="{x:.2f}" y="{y + h * .5:.2f}" text-anchor="middle" font-size="{h * .9:.3f}" font-weight="700" fill="#fff">!</text>'
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{h * 1.4:.3f}" fill="transparent"/></g>')
     if extra_zone:
-        svg.append(zone(extra_zone, "High"))
-        svg.append(f'<text x="{extra_zone["x"]:.2f}" y="{extra_zone["y"] + 4 * k:.2f}" text-anchor="middle" font-size="{11 * k:.3f}" font-weight="700" letter-spacing="{1.5 * k:.3f}" fill="#fff">BLOCKED</text>')
-    for o in obstacles:
-        x, y, h = o["x"], o["y"], max(md.OBSTACLE_R, 10 * k)
-        svg.append(f'<polygon points="{x:.2f},{y - h:.2f} {x + h * .95:.2f},{y + h * .75:.2f} {x - h * .95:.2f},{y + h * .75:.2f}" fill="#192231" fill-opacity=".85" stroke="#fff" stroke-width="1.8" stroke-linejoin="round" {NS}/>'
-                   f'<text x="{x:.2f}" y="{y + h * .5:.2f}" text-anchor="middle" font-size="{h * .9:.3f}" font-weight="700" fill="#fff">!</text>')
+        blk = _html.escape('<div class="th">Simulated Blockage</div><div class="tr"><span>Status</span>Active</div>'
+                           '<div class="td">Temporary simulated blockage used by the rerouting demonstration.</div>', quote=True)
+        svg.append(f'<g class="env" data-tip="{blk}">{zone(extra_zone, "High")}</g>')
+        svg.append(f'<text x="{extra_zone["x"]:.2f}" y="{extra_zone["y"] + 4 * k:.2f}" text-anchor="middle" font-size="{11 * k:.3f}" font-weight="700" letter-spacing="{1.5 * k:.3f}" fill="#fff" pointer-events="none">BLOCKED</text>')
     if original:
-        svg.append(f'<path d="{_path(original)}" fill="none" stroke="#fff" stroke-opacity=".65" stroke-width="2.4" stroke-dasharray="7 7" stroke-linecap="round" {NS}/>')
+        svg.append(f'<path d="{_path(original)}" fill="none" stroke="#fff" stroke-opacity=".65" stroke-width="2.4" stroke-dasharray="7 7" stroke-linecap="round" pointer-events="none" {NS}/>')
     if active:
         color = "#985E6D" if active_style == "sunset" else "#FFFFFF"
         if active_style == "sunset":
-            svg.append(f'<path d="{_path(active)}" fill="none" stroke="#E2A3B3" stroke-opacity=".3" stroke-width="10" stroke-linecap="round" {NS}/>')
-        svg.append(f'<path d="{_path(active)}" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" {NS}/>')
+            svg.append(f'<path d="{_path(active)}" fill="none" stroke="#E2A3B3" stroke-opacity=".3" stroke-width="10" stroke-linecap="round" pointer-events="none" {NS}/>')
+        svg.append(f'<path d="{_path(active)}" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" pointer-events="none" {NS}/>')
     keep = {dep, arr, *waypoints}
     for code, a in A.items():
         if code in keep:
@@ -287,13 +460,13 @@ def build_map(
     if active:
         mx, my = md.route_midpoint(active)
         ang = md.route_heading_deg(active)
-        svg.append(f'<g transform="translate({mx:.2f},{my:.2f}) rotate({ang:.1f}) scale({0.9 * k:.4f})">'
+        svg.append(f'<g pointer-events="none" transform="translate({mx:.2f},{my:.2f}) rotate({ang:.1f}) scale({0.9 * k:.4f})">'
                    '<path d="M16 0L-4-4L-10-15L-14-15L-9-3L-16-3L-18-8L-21-8L-19 0L-21 8L-18 8L-16 3L-9 3L-14 15L-10 15L-4 4Z" fill="#fff" stroke="#192231" stroke-width="1.2"/></g>')
-    for code in (dep, arr):
+    for code, fill in ((dep, "#192231"), (arr, "#985E6D")):          # departure = Evening, destination = Sunset
         a = A[code]
-        svg.append(f'<circle cx="{a["x"]:.2f}" cy="{a["y"]:.2f}" r="{13 * k:.3f}" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="1" {NS}/>'
-                   f'<circle cx="{a["x"]:.2f}" cy="{a["y"]:.2f}" r="{7 * k:.3f}" fill="#192231" stroke="#fff" stroke-width="3" {NS}/>'
-                   f'<text x="{a["x"]:.2f}" y="{a["y"] + 30 * k:.2f}" text-anchor="middle" font-size="{15 * k:.3f}" font-weight="700" letter-spacing="{2.5 * k:.3f}" fill="#fff">{code}</text>')
+        svg.append(f'<circle cx="{a["x"]:.2f}" cy="{a["y"]:.2f}" r="{13 * k:.3f}" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="1" pointer-events="none" {NS}/>'
+                   f'<circle cx="{a["x"]:.2f}" cy="{a["y"]:.2f}" r="{7 * k:.3f}" fill="{fill}" stroke="#fff" stroke-width="3" pointer-events="none" {NS}/>'
+                   f'<text x="{a["x"]:.2f}" y="{a["y"] + 30 * k:.2f}" text-anchor="middle" font-size="{15 * k:.3f}" font-weight="700" letter-spacing="{2.5 * k:.3f}" fill="#fff" pointer-events="none">{code}</text>')
     svg.append("</svg>")
 
     overlays = ""
